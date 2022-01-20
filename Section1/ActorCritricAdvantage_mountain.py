@@ -7,30 +7,52 @@ import numpy as np
 import tensorflow as tf2
 import collections
 import tensorflow.compat.v1 as tf
-# from Miscellaneous.utils import *
+from Miscellaneous.utils import *
 
 tf.disable_v2_behavior()
-
-env = gym.make('CartPole-v1')
+ENV_NAME = 'MountainCarContinuous-v0'
+env = gym.make(ENV_NAME)
 
 np.random.seed(1)
 
-CART_POLE_BEST_MODEL_DIR_PATH = os.path.join(os.getcwd(), "CartPoleBestModels")
-CART_POLE_BEST_MODEL_MODEL_PATH = os.path.join(CART_POLE_BEST_MODEL_DIR_PATH, "CartPoleActorCriticAdvantageBestModel")
-loaded_previously_trained_model = False
+BEST_MODEL_DIR_PATH = os.path.join(os.getcwd(), 'BestModels', f"{ENV_NAME}")
+BEST_MODEL_MODEL_PATH = os.path.join(BEST_MODEL_DIR_PATH, f"{ENV_NAME}_ActorCriticAdvantageBestModel")
 
-if not os.path.isdir(CART_POLE_BEST_MODEL_DIR_PATH):
-    os.makedirs(CART_POLE_BEST_MODEL_DIR_PATH)
+prev_model_to_load_path = None #os.path.join(BEST_MODEL_DIR_PATH,
+                                #       f"{'CartPole-v1'}_ActorCriticAdvantageBestModel.meta")  # or None if you don't want to load a previously trained model
+SAVE_MODEL = False
+LOAD_PREV_TRAINED_MODEL = True
+RENDER = False
+SCALING_METHOD = 'min_max'  # or 'standard_with_samples', 'standard_with_based_on_constraints'
+# this is where to put the environment reward where it is considered solved
+# Our configuration:for cartpole=475, for acrobot=-100, mountain_car_continuous=0
+GOOD_AVG_REWARD_FOR_ENV = 90
+
+if not os.path.isdir(BEST_MODEL_DIR_PATH):
+    os.makedirs(BEST_MODEL_DIR_PATH)
+
+if SCALING_METHOD == 'min_max':
+    position_scaler = get_scaler(space_min=-1.2, space_max=0.6)
+    velocity_scaler = get_scaler(space_min=-0.07, space_max=0.07)
+elif SCALING_METHOD == 'standard_with_samples':
+    position_scaler = get_scaler(method='standard', env_to_sample=env, n_samples=10000, idx_to_sample=0)
+    velocity_scaler = get_scaler(method='standard', env_to_sample=env, n_samples=10000, idx_to_sample=1)
+elif SCALING_METHOD == 'standard_with_based_on_constraints':
+    position_scaler = get_scaler(method='standard', space_min=-1.2, space_max=0.6)
+    velocity_scaler = get_scaler(method='standard', space_min=-0.07, space_max=0.07)
+else:
+    raise ValueError(f"SCALING_METHOD value can only be one of the following {'{'}'min_max', "
+                     f"'standard_with_samples', 'standard_with_based_on_constraints'{'}'}, but got: {SCALING_METHOD}")
 
 
 # Value network class
 class ValueApproximationNetwork:
-    def __init__(self, state_size, learning_rate, name='value_approximation_network', **kwargs):
+    def __init__(self, model_state_size, model_lr, name='value_approximation_network', **kwargs):
         loss_function = kwargs.get('loss_function', tf.losses.mean_squared_error)
         network_optimizer = kwargs.get('network_optimizer', tf.train.AdamOptimizer)
 
-        self.state_size = state_size
-        self.learning_rate = learning_rate
+        self.state_size = model_state_size
+        self.learning_rate = model_lr
 
         self.weights_initializer = tf.keras.initializers.glorot_normal(seed=0)
 
@@ -60,15 +82,21 @@ class ValueApproximationNetwork:
 
 
 class PolicyNetwork:
-    def __init__(self, state_size, action_size, learning_rate, name='policy_network', **kwargs):
-        loss_function = kwargs.get('loss_function', tf.nn.softmax_cross_entropy_with_logits_v2)
+    def __init__(self, model_state_size: int, model_action_size: int,
+                 action_space_min_val: float, action_space_max_val: float,
+                 model_lr: float, name: str = 'policy_network',
+                 **kwargs):
+        # loss_function = kwargs.get('loss_function', tf.nn.softmax_cross_entropy_with_logits_v2)
         network_optimizer = kwargs.get('network_optimizer', tf.train.AdamOptimizer)
 
-        self.state_size = state_size
-        self.action_size = action_size
-        self.learning_rate = learning_rate
+        self.state_size = model_state_size
+        self.action_size = model_action_size
+        self.learning_rate = model_lr
 
         self.weights_initializer = tf.keras.initializers.glorot_normal(seed=0)
+
+        self.dist_initializer = tf.compat.v1.keras.initializers.VarianceScaling(scale=1.0, mode="fan_avg",
+                                                                                distribution="uniform")
 
         with tf.variable_scope(name):
             self.state = tf.placeholder(tf.float32, [None, self.state_size], name="state")
@@ -84,44 +112,40 @@ class PolicyNetwork:
             self.A1 = tf.nn.relu(self.Z1)
             self.output = tf.add(tf.matmul(self.A1, self.W2), self.b2)
 
-            # Softmax probability distribution over actions
-            self.actions_distribution = tf.squeeze(tf.nn.softmax(self.output))
-            # Loss with negative log probability
-            self.neg_log_prob = loss_function(logits=self.output, labels=self.action)
-            self.loss = tf.reduce_mean(self.neg_log_prob * self.R_t)
+            self.mu = tf.layers.dense(self.output, action_size,
+                                      None, self.dist_initializer)
+            self.sigma = tf.layers.dense(self.output, action_size,
+                                         None, self.dist_initializer)
+            self.sigma = tf.nn.softplus(self.sigma) + 1e-5
+
+            self.norm_dist = tf.distributions.Normal(self.mu, self.sigma)
+            self.action = self.norm_dist.sample()
+            self.action = tf.clip_by_value(self.action, action_space_min_val, action_space_max_val)
+
+            self.loss = -tf.log(
+                self.norm_dist.prob(
+                    self.action) + 1e-5) * self.R_t - 1e-5 * self.norm_dist.entropy()
+
             self.optimizer = network_optimizer(learning_rate=self.learning_rate).minimize(self.loss)
 
 
-# Metrics:
-class CustomMetric(tf.keras.metrics.Metric):
-    """
-    custom metric to keep track of loss in each training step
-    """
-
-    def __init__(self, name='training_step_loss', dtype=tf.int32):
-        super(CustomMetric, self).__init__(name=name, dtype=dtype)
-        self.val = None
-
-    def update_state(self, x):
-        self.val = x
-
-    def result(self):
-        return self.val
-
 
 # Define hyperparameters
-state_size = 4
-action_size = env.action_space.n
+state_size, action_size = get_maximum_environments_space_and_action_size()
+try:
+    current_env_action_size = env.action_space.n
+except AttributeError:
+    current_env_action_size = env.action_space.bounded_above.shape[0]
 
 max_episodes = 2000
-max_steps = 501
+max_steps = 201
 discount_factor = 0.99
-learning_rate = 0.001
-parameters_dict = {'lr': learning_rate, 'discount': discount_factor}
+learning_rate = 0.0004
+parameters_dict = {'lr': learning_rate, 'discount': discount_factor, 'scaler': SCALING_METHOD}
 
 # TENSORBOARD
 exp_details = '_'.join([f'{key}={val}' for key, val in parameters_dict.items()])
-exp_details = f'ActorCritic_{exp_details}'
+exp_details = f'{ENV_NAME}_ActorCritic_{exp_details}'
 
 main_dir_to_save = os.sep.join([os.getcwd(), 'Experiments'])
 exp_dir_to_save_train = os.sep.join([main_dir_to_save, exp_details, 'train'])
@@ -132,13 +156,12 @@ if os.path.isdir(exp_dir_to_save_train):
 if os.path.isdir(exp_dir_to_save_test):
     shutil.rmtree(exp_dir_to_save_test, ignore_errors=True)
 
-render = True
-
 # Initialize the policy network
 tf.reset_default_graph()
-policy = PolicyNetwork(state_size, action_size, learning_rate)
+env_action_min, env_action_max = get_env_min_max_action_space(env)
+policy = PolicyNetwork(state_size, action_size, model_lr=learning_rate, action_space_max_val=env_action_min, action_space_min_val=env_action_max)
 # ADDED
-value_approximation_network = ValueApproximationNetwork(state_size=state_size, learning_rate=0.02)
+value_approximation_network = ValueApproximationNetwork(model_state_size=state_size, model_lr=0.02)
 # /ADDED
 
 # TENSORBOARD
@@ -159,27 +182,41 @@ with tf.Session() as sess:
                                                        'value_approximation_of_state'])
     saver = tf.train.Saver()
     # load the model if a trained one already exists:
-    if not loaded_previously_trained_model and os.path.isfile(CART_POLE_BEST_MODEL_MODEL_PATH) :
-        loader = tf.compat.v1.train.import_meta_graph(f"{CART_POLE_BEST_MODEL_MODEL_PATH}.meta")
-        loader.restore(sess, CART_POLE_BEST_MODEL_MODEL_PATH)
-        loaded_previously_trained_model = True
+    if LOAD_PREV_TRAINED_MODEL and os.path.isfile(f"{BEST_MODEL_MODEL_PATH}.meta"):
+        best_model_path = f"{BEST_MODEL_MODEL_PATH}.meta" if prev_model_to_load_path is None else prev_model_to_load_path
+        loader = tf.compat.v1.train.import_meta_graph(f"{BEST_MODEL_MODEL_PATH}.meta")
+        loader.restore(sess, BEST_MODEL_MODEL_PATH)
+        LOAD_PREV_TRAINED_MODEL = True
 
     episode_rewards = np.zeros(max_episodes)
     average_rewards = 0.0
     train = True
     for episode in range(max_episodes):
         state = env.reset()
+        # normalizing the state vector
+        state[0] = position_scaler(state[0])
+        state[1] = velocity_scaler(state[1])
+
+        state = fill_space_vector_with_zeros(state, state_size)
         state = state.reshape([1, state_size])
         episode_transitions = []
         i = 1
         for step in range(max_steps):
-            actions_distribution = sess.run(policy.actions_distribution, {policy.state: state})
-            action = np.random.choice(np.arange(len(actions_distribution)), p=actions_distribution)
-            # action = np.argmax(actions_distribution)
+            action = sess.run(policy.action, {policy.state: state}).reshape(-1)
+            action = action[: current_env_action_size]
+            # actions_distribution = actions_distribution/actions_distribution.sum()
+            # action = np.random.choice(np.arange(len(actions_distribution)), p=actions_distribution)
+            action = action if len(action.shape) else np.array([action])
             next_state, reward, done, _ = env.step(action)
+            next_state = next_state.copy()
+            # normalizing the state vector
+            next_state[0] = position_scaler(next_state[0])
+            next_state[1] = velocity_scaler(next_state[1])
+
+            next_state = fill_space_vector_with_zeros(next_state, state_size)
             next_state = next_state.reshape([1, state_size])
 
-            if render:
+            if RENDER:
                 env.render()
 
             value_approximation_of_curr_state = sess.run(value_approximation_network.state_value_approximation,
@@ -192,12 +229,12 @@ with tf.Session() as sess:
             delta = target - value_approximation_of_curr_state
 
             action_one_hot = np.zeros(action_size)
-            action_one_hot[action] = 1
+            action_one_hot[0] = action[0]
 
             # replaced discounted return with the state advantage
 
             if (train):
-                policy_net_feed_dict = {policy.state: state, policy.R_t: delta, policy.action: action_one_hot}
+                policy_net_feed_dict = {policy.state: state, policy.R_t: delta, policy.action: action_one_hot.reshape(1, -1)}
                 # policy network update
                 _, policy_net_loss = sess.run([policy.optimizer, policy.loss], policy_net_feed_dict)
 
@@ -212,6 +249,8 @@ with tf.Session() as sess:
             episode_rewards[episode] += reward
             i = discount_factor * i
 
+            done = done or step == max_steps - 1
+
             if done:
                 policy_net_feed_dict[policy.R_t] = episode_rewards[episode]
                 summary = sess.run(summaries, policy_net_feed_dict)
@@ -219,21 +258,23 @@ with tf.Session() as sess:
                 if episode > 98:
                     # Check if solved
                     average_rewards = np.mean(episode_rewards[(episode - 99):episode + 1])
+                    if average_rewards > 0:
+                        print(' Solved at episode: ' + str(episode))
+                        solved = True
+
                 print(
                     "Episode {} Reward: {} Average over 100 episodes: {}".format(episode, episode_rewards[episode],
                                                                                  round(average_rewards, 2)))
-                if average_rewards > 475:
-                    print(' Solved at episode: ' + str(episode))
-                    solved = True
-                if (episode_rewards[episode] > 475):
+
+                if (episode_rewards[episode] > GOOD_AVG_REWARD_FOR_ENV):
                     train = False
                 else:
                     train = True
-                break;
+                break
             state = next_state
 
         if solved:
             # save model
-            saver.save(sess, CART_POLE_BEST_MODEL_MODEL_PATH)
+            if SAVE_MODEL:
+                saver.save(sess, BEST_MODEL_MODEL_PATH)
             break
-
