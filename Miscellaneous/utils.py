@@ -66,7 +66,7 @@ def get_scaler(space_min: float = 0, space_max: float = 0,
         scaler.fit(sample_from_env(env_to_sample, idx_to_sample=idx_to_sample, n_samples=n_samples))
 
     def scale_by_min_max(val: float):
-        scaled_val = (space_max - val)/(space_max-space_min)
+        scaled_val = (val-space_min)/(space_max-space_min)
         return scaled_val
 
     def scale_by_standard_with_samples(val: float):

@@ -22,7 +22,7 @@ prev_model_to_load_path = None #os.path.join(BEST_MODEL_DIR_PATH,
                                 #       f"{'CartPole-v1'}_ActorCriticAdvantageBestModel.meta")  # or None if you don't want to load a previously trained model
 SAVE_MODEL = False
 LOAD_PREV_TRAINED_MODEL = True
-RENDER = False
+RENDER = True
 SCALING_METHOD = 'min_max'  # or 'standard_with_samples', 'standard_with_based_on_constraints'
 # this is where to put the environment reward where it is considered solved
 # Our configuration:for cartpole=475, for acrobot=-100, mountain_car_continuous=0
@@ -120,7 +120,7 @@ class PolicyNetwork:
 
             self.norm_dist = tf.distributions.Normal(self.mu, self.sigma)
             self.action = self.norm_dist.sample()
-            self.action = tf.clip_by_value(self.action, action_space_min_val, action_space_max_val)
+            self.action = tf.tanh(self.action)#tf.clip_by_value(self.action, action_space_min_val, action_space_max_val)
 
             self.loss = -tf.log(
                 self.norm_dist.prob(
@@ -138,7 +138,7 @@ except AttributeError:
     current_env_action_size = env.action_space.bounded_above.shape[0]
 
 max_episodes = 2000
-max_steps = 201
+max_steps = 501
 discount_factor = 0.99
 learning_rate = 0.0004
 parameters_dict = {'lr': learning_rate, 'discount': discount_factor, 'scaler': SCALING_METHOD}
@@ -209,6 +209,7 @@ with tf.Session() as sess:
             action = action if len(action.shape) else np.array([action])
             next_state, reward, done, _ = env.step(action)
             next_state = next_state.copy()
+            
             # normalizing the state vector
             next_state[0] = position_scaler(next_state[0])
             next_state[1] = velocity_scaler(next_state[1])
@@ -225,8 +226,8 @@ with tf.Session() as sess:
             value_approximation_of_next_state = sess.run(value_approximation_network.state_value_approximation,
                                                          {value_approximation_network.state: next_state})
 
-            target = reward + discount_factor * value_approximation_of_next_state * (int(1 - done))
-            delta = target - value_approximation_of_curr_state
+            target =  reward + discount_factor * value_approximation_of_next_state * (int(1 - done))
+            delta = (target - value_approximation_of_curr_state)
 
             action_one_hot = np.zeros(action_size)
             action_one_hot[0] = action[0]
@@ -246,15 +247,15 @@ with tf.Session() as sess:
                     [value_approximation_network.optimizer, value_approximation_network.loss],
                     value_approximation_net_feed_dict)
 
-            episode_rewards[episode] += reward
+            episode_rewards[episode] +=  reward
             i = discount_factor * i
 
             done = done or step == max_steps - 1
 
             if done:
                 policy_net_feed_dict[policy.R_t] = episode_rewards[episode]
-                summary = sess.run(summaries, policy_net_feed_dict)
-                tfb_train_summary_writer.add_summary(summary, episode)
+                # summary = sess.run(summaries, policy_net_feed_dict)
+                # tfb_train_summary_writer.add_summary(summary, episode)
                 if episode > 98:
                     # Check if solved
                     average_rewards = np.mean(episode_rewards[(episode - 99):episode + 1])
