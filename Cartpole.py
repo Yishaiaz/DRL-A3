@@ -14,10 +14,9 @@ env = gym.make(ENV_NAME)
 np.random.seed(1)
 
 
-
-
-SAVE_MODEL = False
-LOAD_PREV_TRAINED_MODEL = False
+SAVE_MODEL = True
+LOAD_PREV_OTHER_MODEL = True
+LOAD_PREV_MODEL = False
 BASE_MODEL_NAME = 'Acrobot-v1'
 RENDER = False
 # this is where to put the environment reward where it is considered solved
@@ -35,15 +34,20 @@ except AttributeError:
 max_episodes = 500
 max_steps = 501
 discount_factor = 0.99
-learning_rate = 0.001
+learning_rate = 0.0004
 
 actor = ActorSoftmax(state_size,[64,32],action_size,ENV_NAME,learning_rate)
 
-critic = Critic(state_size,[64,32],ENV_NAME,learning_rate)
+critic = Critic(state_size,[64,32],ENV_NAME,0.001)
 
-if LOAD_PREV_TRAINED_MODEL:
-    actor.load_base('./weights/'+BASE_MODEL_NAME+'_actor')
-    critic.load_base('./weights/'+BASE_MODEL_NAME+'_critic')
+if LOAD_PREV_MODEL:
+    actor.load_model()
+    critic.load_model()
+
+if LOAD_PREV_OTHER_MODEL:
+    actor.load_base('./weights/'+BASE_MODEL_NAME+'_actor.h5')
+    # actor.freeze_train()
+    critic.load_base('./weights/'+BASE_MODEL_NAME+'_critic.h5')
 
 critic_loss_metric = metrics.Mean('critic_loss', dtype=tf.float32)
 actor_loss_metric = metrics.Mean('actor_loss', dtype=tf.float32)
@@ -113,7 +117,8 @@ for episode in range(max_episodes):
                     tf.summary.scalar('critic_loss', critic_loss_metric.result(), step=episode)
                     tf.summary.scalar('avg_reward', average_rewards, step=episode)
                     tf.summary.scalar('reward', episode_rewards[episode], step=episode)
-                if average_rewards > GOOD_AVG_REWARD_FOR_ENV:
+                    
+                if (average_rewards > GOOD_AVG_REWARD_FOR_ENV and episode>98):
                     print(' Solved at episode: ' + str(episode))
                     solved = True
                 if (episode_rewards[episode] > GOOD_AVG_REWARD_FOR_ENV):
@@ -125,8 +130,10 @@ for episode in range(max_episodes):
 
         if solved:
             if SAVE_MODEL:
-                actor.save_weights()
-                critic.save_weights()
+                actor.save_base()
+                critic.save_base()
+                actor.save_model()
+                critic.save_model()                 
             break
 
 

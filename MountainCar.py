@@ -15,10 +15,11 @@ env = gym.make(ENV_NAME)
 
 np.random.seed(65483)
 
-SAVE_MODEL = False
-LOAD_PREV_TRAINED_MODEL = False
+SAVE_MODEL = True
+LOAD_PREV_OTHER_MODEL = False
+LOAD_PREV_MODEL = False
 BASE_MODEL_NAME = 'CartPole-v1'
-RENDER = True
+RENDER = False
 # this is where to put the environment reward where it is considered solved
 # Our configuration:for cartpole=475, for acrobot=-100, mountain_car_continuous=90
 GOOD_AVG_REWARD_FOR_ENV = 90
@@ -49,9 +50,14 @@ actor = ActorDist(state_size,[64,32],-1,1,ENV_NAME,0.0001)
 
 critic = Critic(state_size,[64,32],ENV_NAME,0.0001)
 
-if LOAD_PREV_TRAINED_MODEL:
-    actor.load_base('./weights/'+BASE_MODEL_NAME+'_actor')
-    critic.load_base('./weights/'+BASE_MODEL_NAME+'_critic')
+if LOAD_PREV_MODEL:
+    actor.load_model()
+    actor.freeze_train()
+    critic.load_model()
+
+if LOAD_PREV_OTHER_MODEL:
+    actor.load_base('./weights/'+BASE_MODEL_NAME+'_actor.h5')
+    critic.load_base('./weights/'+BASE_MODEL_NAME+'_critic.h5')
 
 
 critic_loss_metric = metrics.Mean('critic_loss', dtype=tf.float32)
@@ -137,8 +143,8 @@ for episode in range(max_episodes):
             state = next_state
 
         if solved:
-            actor.save_weights()
-            critic.save_weights()
+            actor.save_base()
+            critic.save_base()
             break
 
 

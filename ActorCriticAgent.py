@@ -26,10 +26,16 @@ class Critic(object):
     
     def save_base(self):
         base_model = keras.Model(self.state,self.fc2)
-        base_model.save_weights('./weights/'+self.name+'_critic')  
+        base_model.save_weights('./weights/'+self.name+'_critic.h5')  
 
     def load_base(self,path):
-        self.model.load_weights(path,by_name=True)          
+        self.model.load_weights(path,by_name=True)    
+
+    def save_model(self):
+        self.model.save('models/'+self.name+'_critic.h5') 
+    
+    def load_model(self):
+        self.model = keras.models.load_model('models/'+self.name+'_critic.h5')
     
          
 class ActorBase(ABC):
@@ -37,38 +43,54 @@ class ActorBase(ABC):
         super(ActorBase,self).__init__()
         self.name = name
         self.state = layers.Input(shape=state_dim,name='input')
+        # self.fc1 = layers.Dense(hidden_dim[0],activation='relu',name='fc1')(self.state)
+        # self.do1 = layers.Dropout(0.2,name='do1')(self.fc1)
+        # self.fc2 = layers.Dense(hidden_dim[1],activation='relu',name='fc2')(self.do1)
+        # self.do2 = layers.Dropout(0.2,name='do2')(self.fc2)
+        # self.baseout = layers.BatchNormalization(name='baseout')(self.do2)
+
         self.fc1 = layers.Dense(hidden_dim[0],activation='elu',name='fc1')(self.state)
-        self.do1 = layers.Dropout(0.2,name='do1')(self.fc1)
-        self.fc2 = layers.Dense(hidden_dim[1],activation='elu',name='fc2')(self.do1)
-        self.do2 = layers.Dropout(0.2,name='do2')(self.fc2)
-        self.bn = layers.BatchNormalization(name='bn')(self.do2)
+        self.baseout = layers.Dense(hidden_dim[1],activation='elu',name='baseout')(self.fc1)
+
     
     def save_base(self):
-        base_model = keras.Model(self.state,self.bn)
-        base_model.save_weights('weights/'+self.name+'_actor')
+        base_model = keras.Model(self.state,self.baseout)
+        base_model.save_weights('weights/'+self.name+'_actor.h5')
     
     def load_base(self,path):
         self.model.load_weights(path,by_name=True)
+        
+    def save_model(self):
+        self.model.save('models/'+self.name+'_actor.h5')
+
+    def load_model(self):
+        self.model = keras.models.load_model('models/'+self.name+'_actor.h5')
     
     def freeze_train(self):
+        # self.fc1.trainable=False
+        # self.do1.trainable=False
+        # self.fc2.trainable=False
+        # self.do2.trainable=False
+        
         self.fc1.trainable=False
-        self.do1.trainable=False
-        self.fc2.trainable=False
-        self.do2.trainable=False
-        self.bn.trainable=False
+        self.baseout.trainable=False
+        
+        
     
     def resume_train(self):
+        # self.fc1.trainable=True
+        # self.do1.trainable=True
+        # self.fc2.trainable=True
+        # self.do2.trainable=True
+        
         self.fc1.trainable=True
-        self.do1.trainable=True
-        self.fc2.trainable=True
-        self.do2.trainable=True
-        self.bn.trainable=True        
+        self.baseout.trainable=True
 
 class ActorSoftmax(ActorBase):
     def __init__(self, state_dim, hidden_dim, actions_dim,name, lr=0.001) -> None:
         super(ActorSoftmax,self).__init__(state_dim, hidden_dim,name)
         
-        self.output = layers.Dense(actions_dim,activation='softmax')(self.bn)
+        self.output = layers.Dense(actions_dim,activation='softmax')(self.baseout)
         self.model = keras.Model(self.state,self.output)
         self.optimizer=optimizers.Adam(learning_rate=lr)
         
@@ -94,8 +116,8 @@ class ActorDist(ActorBase):
         
         super(ActorDist,self).__init__(state_dim, hidden_dim,name)
         
-        self.mu = tf.nn.tanh(layers.Dense(1,kernel_regularizer=regularizers.l1_l2(l1=1e-3, l2=1e-3))(self.bn))
-        self.sigma = tf.clip_by_value(tf.nn.softplus(layers.Dense(1,kernel_regularizer=regularizers.l1_l2(l1=1e-3, l2=1e-3))(self.bn)),1e-5,self.max_action)
+        self.mu = tf.nn.tanh(layers.Dense(1,kernel_regularizer=regularizers.l1_l2(l1=1e-3, l2=1e-3))(self.baseout))
+        self.sigma = tf.clip_by_value(tf.nn.softplus(layers.Dense(1,kernel_regularizer=regularizers.l1_l2(l1=1e-3, l2=1e-3))(self.baseout)),1e-5,self.max_action)
   
         self.model = keras.Model(self.state,[self.mu, self.sigma])
         self.optimizer=optimizers.Adam(learning_rate=lr)
