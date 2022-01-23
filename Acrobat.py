@@ -8,26 +8,19 @@ from ActorCriticAgent import *
 from datetime import datetime
 from tensorflow.keras import metrics
 
-ENV_NAME = 'CartPole-v1'
+ENV_NAME = 'Acrobot-v1'
 env = gym.make(ENV_NAME)
 
 np.random.seed(1)
 
-BEST_MODEL_DIR_PATH = os.path.join(os.getcwd(), 'BestModels', f"{ENV_NAME}")
-BEST_MODEL_MODEL_PATH = os.path.join(BEST_MODEL_DIR_PATH, f"{ENV_NAME}_ActorCriticAdvantageBestModel")
-
-prev_model_to_load_path = None #os.path.join(BEST_MODEL_DIR_PATH, f"{'CartPole-v1'}_ActorCriticAdvantageBestModel.meta") # or None if you don't want to load a previously trained model
 SAVE_MODEL = False
 LOAD_PREV_TRAINED_MODEL = False
+BASE_MODEL_NAME = 'Acrobot-v1'
 RENDER = False
 # this is where to put the environment reward where it is considered solved
-# Our configuration:for cartpole=475, for acrobot=-100, mountain_car_continuous=0
-GOOD_AVG_REWARD_FOR_ENV = 475
-
-if not os.path.isdir(BEST_MODEL_DIR_PATH):
-    os.makedirs(BEST_MODEL_DIR_PATH)
-    
-    
+# Our configuration:for cartpole=475, for acrobot=-100, mountain_car_continuous=90
+GOOD_AVG_REWARD_FOR_ENV = -100
+       
 # Define hyperparameters
 state_size, action_size = get_maximum_environments_space_and_action_size()
 try:
@@ -39,11 +32,15 @@ except AttributeError:
 max_episodes = 2000
 max_steps = 501
 discount_factor = 0.99
-learning_rate = 0.001
+learning_rate = 0.0001
 
-actor = ActorSoftmax(state_size,[64,32],action_size,learning_rate)
+actor = ActorSoftmax(state_size,[64,32],action_size,ENV_NAME,learning_rate)
 
-critic = Critic(state_size,[64,32],learning_rate)
+critic = Critic(state_size,[64,32],ENV_NAME,learning_rate)
+
+if LOAD_PREV_TRAINED_MODEL:
+    actor.load_base('./weights/'+BASE_MODEL_NAME+'_actor')
+    critic.load_base('./weights/'+BASE_MODEL_NAME+'_critic')
 
 critic_loss_metric = metrics.Mean('critic_loss', dtype=tf.float32)
 actor_loss_metric = metrics.Mean('actor_loss', dtype=tf.float32)
@@ -52,7 +49,6 @@ actor_loss_metric = metrics.Mean('actor_loss', dtype=tf.float32)
 current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
 log_dir = 'logs/'+ENV_NAME + '/' + current_time
 summary_writer = tf.summary.create_file_writer(log_dir)
-
 def learn(state, action, reward, next_state, done):
     with tf.GradientTape() as tape1, tf.GradientTape() as tape2:
         actions_distribution = actor.predict(state)
@@ -124,6 +120,8 @@ for episode in range(max_episodes):
             state = next_state
 
         if solved:
+            if SAVE_MODEL:
+                actor.save_weights()
+                critic.save_weights()            
             break
-
 
