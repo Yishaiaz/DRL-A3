@@ -6,7 +6,9 @@ import tensorflow as tf
 from Miscellaneous.utils import *
 from ActorCriticAgent import *
 from datetime import datetime
+import time
 from tensorflow.keras import metrics
+
 
 ENV_NAME = 'Acrobot-v1'
 env = gym.make(ENV_NAME)
@@ -51,8 +53,16 @@ actor_loss_metric = metrics.Mean('actor_loss', dtype=tf.float32)
 
 
 current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-log_dir = 'logs/'+ENV_NAME + '/' + current_time
+if IS_PROGRESSIVE:
+    mode="pnn"
+elif LOAD_PREV_OTHER_MODEL:
+    mode="finetune"
+else:
+    mode="simple"
+    
+log_dir = "logs/{}/{}_{}".format(ENV_NAME,current_time,mode)
 summary_writer = tf.summary.create_file_writer(log_dir)
+
 def learn(state, action, reward, next_state, done):
     with tf.GradientTape() as tape1, tf.GradientTape() as tape2:
         actions_distribution = actor.predict(state)
@@ -78,10 +88,10 @@ solved = False
 episode_rewards = np.zeros(max_episodes)
 average_rewards = 0.0
 train = True
-
+start_time = time.time()
 for episode in range(max_episodes):
         state = env.reset()
-        state = fill_space_vector_with_zeros(state, state_size)
+        state = fill_space_vector_with_zeros((state), state_size)
         state = state.reshape([1, state_size])
         episode_transitions = []
         i = 1
@@ -89,7 +99,8 @@ for episode in range(max_episodes):
         critic_loss_metric.reset_states()
         for step in range(max_steps):
             action = actor.take_action(state,current_env_action_size)
-            next_state, reward, done, _ = env.step(action)                                
+            next_state, reward, done, _ = env.step(action)   
+            next_state = (next_state)                             
             next_state = fill_space_vector_with_zeros(next_state, state_size)
             next_state = next_state.reshape([1, state_size])
 
@@ -115,7 +126,7 @@ for episode in range(max_episodes):
                     tf.summary.scalar('reward', episode_rewards[episode], step=episode)
                     
                 if (average_rewards > GOOD_AVG_REWARD_FOR_ENV and episode>98):
-                    print(' Solved at episode: ' + str(episode))
+                    print("Solved at episode: {}, total time: {}".format(str(episode), time.time()-start_time))
                     solved = True
                 if (episode_rewards[episode] > GOOD_AVG_REWARD_FOR_ENV):
                     train = False
