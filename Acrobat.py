@@ -15,6 +15,7 @@ env = gym.make(ENV_NAME)
 
 np.random.seed(1)
 
+IS_PROGRESSIVE = False
 SAVE_MODEL = True
 LOAD_PREV_OTHER_MODEL = False
 LOAD_PREV_MODEL = False
